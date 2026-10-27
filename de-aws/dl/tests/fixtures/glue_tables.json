@@ -549,7 +549,7 @@
    [
     "mode",
     "string",
-    "new | reprocess | rebuild"
+    "new (extracción de los RSS) | reprocess (desde Bronze) | rebuild"
    ],
    [
     "status",
@@ -575,6 +575,11 @@
     "sources_failed",
     "array<string>",
     "Fuentes no disponibles o inválidas"
+   ],
+   [
+    "sources_reused",
+    "array<string>",
+    "Fuentes procesadas desde Bronze sin consultar el RSS"
    ],
    [
     "failed_tasks",
@@ -617,6 +622,11 @@
     "Noticias vigentes en Silver tras la corrida"
    ],
    [
+    "news_without_valid_date",
+    "int",
+    "Noticias vigentes sin fecha de publicación válida (fuera de los agregados diarios)"
+   ],
+   [
     "comprehend_calls",
     "int",
     "Textos enviados a Comprehend"
@@ -625,6 +635,11 @@
     "comprehend_cached",
     "int",
     "Textos reutilizados de la caché"
+   ],
+   [
+    "comprehend_errors",
+    "int",
+    "Textos que Comprehend no pudo analizar"
    ],
    [
     "partitions_published",
@@ -647,7 +662,7 @@
     "Resumen"
    ]
   ],
-  "description": "Control. Una fila por corrida con sus conteos y su estado.",
+  "description": "Control. Una fila por procesamiento de una corrida (nueva, repetida, recuperada o reconstruida) con sus conteos y su estado.",
   "format": "json",
   "location": "control/run_log/",
   "partitions": []

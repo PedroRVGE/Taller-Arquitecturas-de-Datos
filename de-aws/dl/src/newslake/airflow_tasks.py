@@ -19,7 +19,7 @@ from .settings import ALL_TABLES, WRITER_POOL, bucket, feeds_config, glue_databa
 
 LOGGER = logging.getLogger(__name__)
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-CORE_TASKS = ("transform_silver", "enrich_comprehend", "publish_silver", "build_gold",
+CORE_TASKS = ("validate_access", "transform_silver", "enrich_comprehend", "publish_silver", "build_gold",
               "failure_injection", "update_glue_catalog", "athena_validations")
 TIMESTAMP_FIELDS = ("published_at_utc", "analyzed_at", "ingested_at_utc", "detected_at")
 
@@ -124,6 +124,8 @@ def ingest_source(source_id, **context):
     existing = bronze.existing_record(run["run_id"], source_id)
     if existing and existing.get("status") in ("ok", "no_items"):
         log.info("La corrida ya tiene Bronze (%s); se reprocesa sin consultar el RSS", existing["bronze_key"])
+        # Marca para la bitácora: en esta ejecución del DAG la fuente se reprocesó, no se extrajo.
+        stage(run["run_id"], f"reused_{source_id}", {"dag_run_id": context["dag_run"].run_id})
         return existing
     if run["mode"] == "reprocess":
         raise AirflowFailException(f"La corrida {run['run_id']} no tiene Bronze válido para {source_id}")
@@ -166,9 +168,19 @@ def _parsed_sources(records):
     return parsed
 
 
+def require_validation(context):
+    """transform_silver corre con ALL_DONE para tolerar una fuente caída, pero no sin validación."""
+    states = {ti.task_id: ti.state for ti in context["dag_run"].get_task_instances()}
+    if states.get("validate_access") != "success":
+        raise AirflowFailException(
+            f"validate_access terminó en {states.get('validate_access')!r}: no se procesa sin validar el acceso"
+        )
+
+
 def transform_silver(**context):
     run = run_info(context)
     log = task_log(run, "transform_silver")
+    require_validation(context)
     now = utcnow()
 
     if run["mode"] == "rebuild":
@@ -272,10 +284,12 @@ def failure_injection(**context):
     if not context["params"].get("simulate_failure"):
         return "sin fallo simulado"
     run = run_info(context)
+    log = task_log(run, "failure_injection")
     if storage.put_if_absent(f"control/failure_injection/run_id={run['run_id']}", b"fallo controlado", "text/plain"):
-        raise AirflowFailException(
-            f"Fallo controlado en {run['run_id']}: Silver y Gold están escritos pero no publicados en Glue"
-        )
+        message = f"Fallo controlado en {run['run_id']}: Silver y Gold están escritos pero no publicados en Glue"
+        log.error(message)
+        raise AirflowFailException(message)
+    log.info("Fallo ya simulado para esta corrida; se continúa")
     return "fallo ya simulado; se continúa"
 
 
@@ -284,7 +298,14 @@ def update_glue_catalog(**context):
     run = run_info(context)
     log = task_log(run, "update_glue_catalog")
     plan = unstage(run["run_id"], "plan_silver") + unstage(run["run_id"], "plan_gold")
-    applied = storage.apply_plan(plan, run["run_id"])
+    try:
+        applied = storage.apply_plan(plan, run["run_id"])
+    except storage.StalePlanError as error:
+        log.error("%s", error)
+        raise AirflowFailException(
+            f"{error}. Otra corrida publicó mientras esta estaba detenida; aplicar este plan perdería sus noticias. "
+            f'Recupere con {{"reprocess_run_id": "{run["run_id"]}"}}, que recalcula desde Bronze sobre el estado actual.'
+        ) from error
     storage.cleanup_old_versions(plan)
     stage(run["run_id"], "glue", {"partitions_published": applied})
     log.info("Glue actualizado: %s particiones creadas, actualizadas o eliminadas", applied)
@@ -308,7 +329,13 @@ def athena_validations(**context):
 
 # ------------------------------------------------------------------ 9. estado
 def record_run_status(**context):
-    """Siempre se ejecuta. Clasifica la corrida en complete, partial o failed."""
+    """Siempre se ejecuta. Clasifica la corrida en complete, partial o failed.
+
+    Cada procesamiento deja su propio archivo en control/run_log/: repetir o recuperar una
+    corrida no borra los conteos con los que se procesó la primera vez. mode distingue una
+    extracción nueva (new) de un reproceso desde Bronze (reprocess, también cuando se repite
+    un run_id que ya tenía Bronze) y de una reconstrucción (rebuild).
+    """
     run = run_info(context)
     log = task_log(run, "record_run_status")
     run_id = run["run_id"]
@@ -321,6 +348,11 @@ def record_run_status(**context):
         for source in sources():
             record = bronze.existing_record(run_id, source["id"])
             (sources_ok if record and record.get("status") in ("ok", "no_items") else sources_failed).append(source["id"])
+
+    reused = [source_id for source_id in sources_ok
+              if (storage.get_json(_staging_key(run_id, f"reused_{source_id}")) or {}).get("dag_run_id")
+              == context["dag_run"].run_id]
+    mode = "reprocess" if run["mode"] == "new" and sources_ok and reused == sources_ok else run["mode"]
 
     core_failed = [task for task in failed_tasks if task.split(".")[-1] in CORE_TASKS]
     if core_failed or (run["mode"] != "rebuild" and not sources_ok):
@@ -335,24 +367,27 @@ def record_run_status(**context):
     validations = unstage(run_id, "validations", default={})
     record = {
         "run_id": run_id,
-        "mode": run["mode"],
+        "mode": mode,
         "status": status,
         "started_at": context["dag_run"].start_date.astimezone(timezone.utc).replace(tzinfo=None).isoformat(),
         "finished_at": utcnow().isoformat(),
         "sources_ok": sources_ok,
         "sources_failed": sources_failed,
+        "sources_reused": reused,
         "failed_tasks": failed_tasks,
         **{key: counts.get(key) for key in ("received", "rejected", "duplicates_in_batch", "new", "updated",
-                                            "repeated", "unique_news_current")},
+                                            "repeated", "unique_news_current", "news_without_valid_date")},
         "comprehend_calls": enrich_stats.get("comprehend_calls"),
         "comprehend_cached": enrich_stats.get("comprehend_cached"),
+        "comprehend_errors": enrich_stats.get("comprehend_errors"),
         "partitions_published": unstage(run_id, "glue", default={}).get("partitions_published"),
         "bytes_scanned_with_filter": validations.get("bytes_scanned_with_filter"),
         "bytes_scanned_without_filter": validations.get("bytes_scanned_without_filter"),
         "message": f"Fuentes fallidas: {sources_failed}" if sources_failed else "Sin fuentes fallidas",
     }
-    storage.put(f"control/run_log/{run_id}.json", (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"),
-                "application/json")
+    processed = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    storage.put(f"control/run_log/{run_id}__{processed}.json",
+                (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"), "application/json")
     log.info("Corrida %s: %s", status, record)
     if status != "complete":
         raise AirflowFailException(f"Corrida {status}. Fuentes fallidas: {sources_failed}; tareas: {failed_tasks}")

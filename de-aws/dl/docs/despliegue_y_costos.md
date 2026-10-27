@@ -16,7 +16,7 @@ Crea en unos 3 minutos: VPC de 2 zonas, bucket único, base `news_lake` con 10 t
 ## Ejecutar
 
 1. `make dl-tunnel` y abrir <http://localhost:8081> (o `terraform output airflow_url` si su IP está en `allowed_cidrs`). Usuario `airflow`; contraseña en el secreto (`terraform output secret_arn`).
-2. `newslake_pipeline` se crea activo y corre cada 30 minutos (`pipeline_schedule`). Para no esperar: *Trigger DAG*.
+2. `newslake_pipeline` se crea activo y corre cada 30 minutos (`pipeline_schedule`). Para no esperar: *Trigger DAG*. Mientras exista el despliegue sigue corriendo y gastando (Comprehend, Athena, EC2): páuselo al terminar la demostración y elimine los recursos con `terraform destroy`.
 3. Consultar en Athena con el workgroup `de-aws-dev-dl` (pestaña *Saved queries*).
 
 Actualizar código: `make dl-deploy-code`.

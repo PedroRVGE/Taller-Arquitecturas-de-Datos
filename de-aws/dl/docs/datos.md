@@ -50,7 +50,7 @@ Una fuente caída queda registrada y deja la corrida en `partial`: nunca se conf
 
 `content_hash` resume título, descripción, enlace canónico y `pubDate` original. La limpieza quita etiquetas HTML y entidades (incluso codificadas dos veces) y normaliza espacios.
 
-**Noticias sin fecha válida.** No se pueden ubicar en un día: quedan en Silver bajo `published_date='unknown'`, se excluyen de los agregados diarios de Gold y se cuentan en el log de la corrida.
+**Noticias sin fecha válida.** No se pueden ubicar en un día: quedan en Silver bajo `published_date='unknown'`, se excluyen de los agregados diarios de Gold y se cuentan en la bitácora de cada procesamiento (`pipeline_runs.news_without_valid_date`).
 
 ## Diccionario de datos
 
@@ -71,7 +71,7 @@ Las columnas y sus comentarios viven en `terraform/glue.tf` y aparecen en la con
 | Tabla | Granularidad | Métrica | Pregunta que responde |
 | --- | --- | --- | --- |
 | `gold_news_daily` | día × medio × sección | `news_count` = noticias distintas | ¿Cuántas noticias por día, medio y sección? |
-| `gold_entity_daily` | día × tipo × entidad normalizada | `news_count` = noticias distintas que mencionan la entidad | ¿Qué personas, organizaciones y lugares aparecen en más noticias? ¿Cómo cambia su presencia entre fechas? |
+| `gold_entity_daily` | día × tipo × entidad normalizada | `news_count` = noticias distintas que mencionan la entidad | ¿Qué personas, organizaciones y lugares aparecen en más noticias? (`03_top10_organizaciones.sql`, `12_top10_personas_y_lugares.sql`) ¿Cómo cambia su presencia entre fechas? (`04_presencia_entidad_por_dia.sql`) |
 | `gold_key_phrases_daily` | día × medio × sección × frase | `news_count` = noticias distintas que contienen la frase | ¿Qué frases clave son más frecuentes por sección? |
 
 La presencia de una entidad cuenta **noticias distintas**: si "Petro" aparece tres veces en una noticia, suma 1. Como cada noticia tiene una sola `published_date`, sumar los días no cuenta dos veces la misma noticia.
@@ -81,9 +81,9 @@ La presencia de una entidad cuenta **noticias distintas**: si "Petro" aparece tr
 | Tabla | Granularidad | Uso |
 | --- | --- | --- |
 | `bronze_ingestions` | fuente × corrida | Estado HTTP, hash, bytes, ítems y archivo de Bronze |
-| `pipeline_runs` | corrida | Estado, fuentes caídas, conteos recibidos, rechazados, nuevos, actualizados, repetidos, llamadas a Comprehend, bytes escaneados |
+| `pipeline_runs` | procesamiento de una corrida (una corrida repetida o recuperada suma filas, no reemplaza la anterior) | Modo (`new` = extracción de los RSS, `reprocess` = desde Bronze, `rebuild`), estado, fuentes caídas y reutilizadas, conteos recibidos, rechazados, nuevos, actualizados, repetidos, noticias sin fecha válida, llamadas, caché y errores de Comprehend, bytes escaneados |
 
-**Recibidos frente a noticias únicas.** `received` cuenta ítems de los XML: incluye la misma noticia en dos feeds (`duplicates_in_batch`), noticias ya conocidas (`repeated`) y rechazos. Por eso `received = new + updated + repeated + duplicates_in_batch + rejected` y `unique_news_current` crece solo con `new`.
+**Recibidos frente a noticias únicas.** `received` cuenta ítems de los XML: incluye la misma noticia en dos feeds (`duplicates_in_batch`), noticias ya conocidas (`repeated`) y rechazos. Por eso `received = new + updated + repeated + duplicates_in_batch + rejected` (lo comprueba la validación `v07`) y `unique_news_current` crece solo con `new`.
 
 ## Enriquecimiento con Comprehend
 

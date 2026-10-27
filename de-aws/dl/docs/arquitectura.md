@@ -41,7 +41,8 @@ flowchart TD
 | `silver/news_quarantine/ingestion_date=<fecha>/run_id=<id>/` | Parquet | Rechazos con motivo y archivo de Bronze | Una partición por corrida |
 | `silver/comprehend_results/analyzed_date=<fecha>/run_id=<id>/` | Parquet | Caché de análisis por hash de texto | Una partición por corrida |
 | `gold/<tabla>/published_date=<fecha>/version=<run_id>/` | Parquet | Indicadores agregados | Cada versión es una carpeta nueva |
-| `control/bronze_log/`, `control/run_log/` | JSON (una línea) | Bitácoras de ingesta y de corrida, consultables en Athena | Se reescriben por corrida |
+| `control/bronze_log/` | JSON (una línea) | Bitácora de ingesta por fuente y corrida, consultable en Athena | Se reescribe por corrida |
+| `control/run_log/<run_id>__<fecha>.json` | JSON (una línea) | Bitácora de cada procesamiento, consultable en Athena | Un archivo por procesamiento: repetir no borra el anterior |
 | `control/staging/run_id=<id>/` | JSON | Archivos de trabajo entre tareas | Expiran a los 3 días |
 | `athena-results/` | CSV | Resultados de Athena | Expiran a los 7 días |
 | `artifacts/` | — | Código y configuración publicados por Terraform | — |

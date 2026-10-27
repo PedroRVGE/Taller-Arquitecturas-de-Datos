@@ -120,3 +120,106 @@ def test_append_batch_must_follow_watermark_order():
     ensure_batch_order(FakeOrdersCursor(batch_2), 2)  # repetir el mismo lote
     with pytest.raises(ValueError, match="older than the last appended batch"):
         ensure_batch_order(FakeOrdersCursor(batch_2), 1)
+
+
+def _airflow_tasks(monkeypatch):
+    """Importa airflow_tasks sin Airflow instalado: basta con AirflowFailException."""
+    import sys
+    import types
+
+    if "airflow" not in sys.modules:
+        airflow = types.ModuleType("airflow")
+        airflow.exceptions = types.ModuleType("airflow.exceptions")
+        airflow.exceptions.AirflowFailException = type("AirflowFailException", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "airflow", airflow)
+        monkeypatch.setitem(sys.modules, "airflow.exceptions", airflow.exceptions)
+    from extract import airflow_tasks
+
+    return airflow_tasks
+
+
+class FakeTI:
+    def __init__(self, task_id, state=None, batch=None):
+        self.task_id, self.state, self.batch = task_id, state, batch
+
+    def xcom_pull(self, task_ids):
+        return self.batch
+
+
+class FakeDagRun:
+    run_id = "manual__1"
+
+    def __init__(self, states):
+        self.states = states
+
+    def get_task_instances(self):
+        return [FakeTI(task_id, state) for task_id, state in self.states.items()]
+
+
+def test_record_result_registers_batch_that_failed_before_resolve(monkeypatch):
+    tasks = _airflow_tasks(monkeypatch)
+    calls = []
+    monkeypatch.setattr(tasks.redshift, "record_failed_batch", lambda *args: calls.append(("failed", args)))
+    monkeypatch.setattr(tasks.redshift, "set_status", lambda *args: calls.append(("status", args)))
+    context = {
+        "dag_run": FakeDagRun({"validate_connections": "failed", "resolve_batch": "upstream_failed"}),
+        "ti": FakeTI("record_result"),
+        "params": {"batch_id": "b1", "mode": "auto"},
+    }
+    with pytest.raises(tasks.AirflowFailException):
+        tasks.record_result(**context)
+    assert calls[0][0] == "failed" and calls[0][1][:3] == ("b1", "manual__1", "auto")
+    assert "validate_connections" in calls[0][1][3]
+
+    calls.clear()
+    context["ti"] = FakeTI("record_result", batch={"batch_id": "b1", "mode": "full"})
+    context["dag_run"] = FakeDagRun({"validate_connections": "success", "reconcile": "success"})
+    tasks.record_result(**context)
+    assert calls == [("status", ("b1", "success", "Pipeline completo"))]
+
+
+class FakeBatchRunsCursor:
+    def __init__(self, existing):
+        self.existing, self.statements, self.result = existing, [], None
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+        self.result = (1,) if sql.startswith("select 1") and self.existing else None
+
+    def fetchone(self):
+        return self.result
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_record_failed_batch_never_overwrites_a_registered_batch(monkeypatch, existing):
+    from extract import redshift
+
+    cursor = FakeBatchRunsCursor(existing)
+    monkeypatch.setattr(redshift, "redshift_connection", lambda: FakeConnection(cursor))
+    redshift.record_failed_batch("b1", "manual__1", "auto", "Tareas fallidas antes de registrar el lote: x")
+    inserts = [sql for sql in cursor.statements if sql.startswith("insert into ops.batch_runs")]
+    assert len(inserts) == (0 if existing else 1)
+    assert not any(sql.startswith("update ops.batch_runs") for sql in cursor.statements)
+
+
+def test_failure_injection_logs_batch_and_task(monkeypatch, caplog):
+    tasks = _airflow_tasks(monkeypatch)
+    monkeypatch.setattr(tasks, "bucket_name", lambda: "bucket")
+    monkeypatch.setattr(tasks, "put_marker_once", lambda *args: True)
+    with caplog.at_level("ERROR"), pytest.raises(tasks.AirflowFailException):
+        tasks.failure_injection({"batch_id": "b7"}, params={"simulate_failure": True})
+    assert "[batch=b7 task=failure_injection] Fallo controlado del lote b7" in caplog.text

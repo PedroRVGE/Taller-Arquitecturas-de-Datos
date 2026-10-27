@@ -72,6 +72,9 @@ def store_valid_response(run_id, source, ingested_at, content, http_status, orig
     key = prefix + "feed.xml"
     if not storage.put_if_absent(key, content, "application/rss+xml"):
         log.info("%s: %s ya existía; se conserva el original", source["id"], key)
+        # Hash, tamaño e ítems deben describir el archivo guardado, no la respuesta descartada.
+        content = storage.get(key)
+        feed = rss.parse_feed(content)
     record = _record(
         run_id, source, ingested_at,
         http_status=http_status,

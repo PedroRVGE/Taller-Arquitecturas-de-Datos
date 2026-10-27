@@ -1,5 +1,6 @@
 """Recorre el DAG completo en local (sin Athena) y verifica los escenarios del taller."""
 
+import itertools
 import json
 from datetime import datetime, timezone
 
@@ -27,8 +28,12 @@ class FakeTI:
         self.state = state
 
 
+DAG_RUN_IDS = itertools.count(1)
+
+
 class FakeDagRun:
     def __init__(self):
+        self.run_id = f"manual__{next(DAG_RUN_IDS)}"
         self.start_date = datetime.now(timezone.utc)
         self.states = {}
 
@@ -36,7 +41,13 @@ class FakeDagRun:
         return [FakeTI(task_id, state) for task_id, state in self.states.items()]
 
 
-def run_dag(day, **params):
+def latest_run_log(run_id):
+    """Último procesamiento registrado de la corrida (cada procesamiento deja su archivo)."""
+    keys = sorted(storage.list_keys(f"control/run_log/{run_id}__"))
+    return json.loads(storage.get(keys[-1]))
+
+
+def run_dag(day, validation_ok=True, **params):
     """Ejecuta las tareas en orden, como el scheduler. Devuelve la bitácora de la corrida."""
     defaults = {"run_id": "", "reprocess_run_id": "", "rebuild_from_bronze": False, "simulate_change_from_run": "",
                 "unavailable_source": "", "simulate_failure": False}
@@ -44,8 +55,15 @@ def run_dag(day, **params):
     context = {"params": {**defaults, **params}, "logical_date": FakeDate(datetime(2026, 10, day, 12)),
                "dag_run": dag_run, "ti": FakeTI("record_run_status")}
 
-    tasks.validate_access(**context)
+    if validation_ok:
+        tasks.validate_access(**context)
+        dag_run.states["validate_access"] = "success"
+    else:
+        dag_run.states["validate_access"] = "failed"
     for source in sources():
+        if not validation_ok:
+            dag_run.states[f"ingest_bronze.{source['id']}"] = "upstream_failed"
+            continue
         try:
             tasks.ingest_source(source["id"], **context)
             dag_run.states[f"ingest_bronze.{source['id']}"] = "success"
@@ -63,7 +81,7 @@ def run_dag(day, **params):
     except AirflowFailException:
         pass
     run = tasks.run_info(context)
-    return json.loads(storage.get(f"control/run_log/{run['run_id']}.json")), run
+    return latest_run_log(run["run_id"]), run
 
 
 def gold_matches_silver():
@@ -84,6 +102,8 @@ def test_full_scenarios(aws, comprehend, feeds):
     assert log["received"] == 30
     assert log["new"] == log["unique_news_current"] > 0
     assert log["new"] + log["duplicates_in_batch"] + log["rejected"] == log["received"]
+    assert log["mode"] == "new" and log["sources_reused"] == []
+    assert log["news_without_valid_date"] == 0 and log["comprehend_errors"] == 0
     assert log["comprehend_calls"] == comprehend.calls == log["new"]
     news = storage.read_published_rows("news")
     assert len(news) == len({row["news_id"] for row in news}) == log["unique_news_current"]
@@ -98,6 +118,10 @@ def test_full_scenarios(aws, comprehend, feeds):
     calls = comprehend.calls
     log, _ = run_dag(1)
     assert log["status"] == "complete" and log["new"] == 0 and log["repeated"] == log["unique_news_current"]
+    assert log["mode"] == "reprocess" and sorted(log["sources_reused"]) == sorted(s["id"] for s in sources())
+    history = sorted(storage.list_keys(f"control/run_log/{first['run_id']}__"))
+    assert len(history) == 2  # la primera bitácora (con sus noticias nuevas) se conserva
+    assert json.loads(storage.get(history[0]))["new"] == json.loads(storage.get(history[0]))["unique_news_current"]
     assert log["partitions_published"] == 0 and comprehend.calls == calls
     assert list(storage.list_keys("bronze/")) == bronze_keys
     assert len(storage.read_published_rows("news")) == log["unique_news_current"]
@@ -159,3 +183,56 @@ def test_run_id_validation(bad_id):
     else:
         with pytest.raises(AirflowFailException):
             tasks.run_info(context)
+
+
+def test_failed_validation_stops_processing_even_with_bronze(aws, comprehend, feeds):
+    """Con Bronze ya escrito (repetición del run_id), una validación fallida no deja seguir el pipeline."""
+    _, first = run_dag(1)
+    published = storage.published_partitions("news")
+    log, _ = run_dag(1, validation_ok=False, run_id=first["run_id"])
+    assert log["status"] == "failed"
+    assert "validate_access" in log["failed_tasks"] and "transform_silver" in log["failed_tasks"]
+    assert storage.published_partitions("news") == published
+
+
+def test_clear_after_another_run_published_is_rejected(aws, comprehend, feeds):
+    """Recuperar con Clear una corrida detenida no puede pisar lo que publicó una corrida posterior."""
+    _, first = run_dag(1)
+    log, failed_run = run_dag(2, simulate_change_from_run=first["run_id"], simulate_failure=True)
+    assert log["status"] == "failed"
+    log, _ = run_dag(3, simulate_change_from_run=first["run_id"])  # corrida B publica en medio
+    assert log["status"] == "complete"
+    published = storage.published_partitions("news")
+
+    context = {"params": {"run_id": failed_run["run_id"], "reprocess_run_id": "", "rebuild_from_bronze": False,
+                          "simulate_change_from_run": first["run_id"], "unavailable_source": "",
+                          "simulate_failure": True},
+               "logical_date": FakeDate(datetime(2026, 10, 2, 12)), "dag_run": FakeDagRun(),
+               "ti": FakeTI("update_glue_catalog")}
+    tasks.failure_injection(**context)  # el marcador ya existe: Clear deja pasar la tarea
+    with pytest.raises(AirflowFailException, match="reprocess_run_id"):
+        tasks.update_glue_catalog(**context)
+    assert storage.published_partitions("news") == published
+
+    log, _ = run_dag(4, reprocess_run_id=failed_run["run_id"])  # recuperación indicada en el error
+    assert log["status"] == "complete" and log["mode"] == "reprocess"
+    assert gold_matches_silver()
+
+
+def test_bronze_record_describes_the_stored_file(aws):
+    """Si el feed.xml de la corrida ya existía, hash y tamaño son los del archivo conservado."""
+    import hashlib
+
+    from conftest import FIXTURES
+    from newslake import bronze
+
+    source = sources()[0]
+    original = (FIXTURES / "economia.xml").read_bytes()
+    retry = (FIXTURES / "politica.xml").read_bytes()
+    ingested_at = datetime(2026, 10, 1, 12)
+    first = bronze.store_valid_response("r1", source, ingested_at, original, 200, "http")
+    second = bronze.store_valid_response("r1", source, ingested_at, retry, 200, "http")
+    assert second["bronze_key"] == first["bronze_key"]
+    assert storage.get(second["bronze_key"]) == original
+    assert second["content_sha256"] == hashlib.sha256(original).hexdigest() == first["content_sha256"]
+    assert second["bytes"] == len(original) and second["item_count"] == first["item_count"]

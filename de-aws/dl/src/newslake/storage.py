@@ -216,8 +216,42 @@ def stage_table(table, rows, run_id, mode):
     return plan
 
 
+class StalePlanError(RuntimeError):
+    """El catálogo cambió después de calcular el plan (otra corrida publicó entre medias)."""
+
+
+def stale_entries(plan):
+    """Entradas del plan cuya partición ya no apunta a donde apuntaba al calcularlo.
+
+    Una entrada ya aplicada por un intento anterior de esta misma corrida no cuenta como conflicto.
+    """
+    stale = []
+    published_by_table = {}
+    for entry in plan:
+        if entry["table"] not in published_by_table:
+            published_by_table[entry["table"]] = published_partitions(entry["table"])
+        current = published_by_table[entry["table"]].get(tuple(entry["values"]))
+        current_location = current["location"] if current else None
+        target = entry.get("location") if entry["action"] == "upsert" else None
+        if current_location not in (entry["previous_location"], target):
+            stale.append({**entry, "current_location": current_location})
+    return stale
+
+
 def apply_plan(plan, run_id):
-    """Cambia los punteros de Glue: aquí los datos nuevos se vuelven visibles en Athena."""
+    """Cambia los punteros de Glue: aquí los datos nuevos se vuelven visibles en Athena.
+
+    Antes de tocar el catálogo comprueba que ninguna partición cambió desde que se calculó el
+    plan. Si cambió, aplicarlo pisaría lo que publicó otra corrida (pérdida de noticias): se
+    rechaza completo y la corrida debe recalcularse desde Bronze (reprocess_run_id).
+    """
+    stale = stale_entries(plan)
+    if stale:
+        sample = [(e["table"], e["values"]) for e in stale[:3]]
+        raise StalePlanError(
+            f"{len(stale)} particiones cambiaron después de calcular el plan de {run_id} (p. ej. {sample})"
+        )
+
     by_table = {}
     for entry in plan:
         by_table.setdefault(entry["table"], []).append(entry)

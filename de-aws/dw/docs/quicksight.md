@@ -1,6 +1,6 @@
 # Dashboard en QuickSight
 
-El dashboard consume la vista `marts.rpt_sales_dashboard`: una fila por línea de venta con fecha, categoría, territorio, canal, cantidad, subtotal y `data_refreshed_at` (último `_loaded_at` de las líneas en raw).
+El dashboard consume la vista `marts.rpt_sales_dashboard`: una fila por línea de venta con fecha, categoría, territorio, canal, cantidad, subtotal y `data_refreshed_at` (última extracción desde la fuente, `_extracted_at`, de las líneas válidas; no cambia al reprocesar un lote sin datos nuevos).
 
 ## Preparación (una vez)
 

@@ -1,8 +1,8 @@
 """Carga de lotes a Redshift y tablas de control del pipeline (esquema ops).
 
 Estados de un lote en ops.batch_runs:
-    running -> extracted -> loaded -> transformed -> success
-                                   \\-> failed (en cualquier punto)
+    running -> loaded -> transformed -> success
+                      \\-> failed (en cualquier punto, también antes de resolve_batch)
 
 La marca de avance (watermark) de cada entidad está en ops.batch_entities y solo se usa
 para la siguiente extracción incremental cuando el lote llegó al menos a "loaded", es
@@ -109,6 +109,24 @@ def register_batch(batch_id, dag_run_id, requested_mode, mode):
             )
         connection.commit()
         return attempts
+
+
+def record_failed_batch(batch_id, dag_run_id, requested_mode, message):
+    """Registra un lote que falló antes de resolve_batch (sin modo ni marca de avance).
+
+    Si el lote ya existía, por ejemplo un reproceso de un lote exitoso, no se toca: cambiar su
+    estado le quitaría la marca de avance que ya aportó.
+    """
+    with closing(redshift_connection()) as connection:
+        cursor = connection.cursor()
+        bootstrap(cursor)
+        if _fetchone(cursor, "select 1 from ops.batch_runs where batch_id = %s", (batch_id,)) is None:
+            cursor.execute(
+                "insert into ops.batch_runs (batch_id, dag_run_id, requested_mode, status, attempts, started_at,"
+                " finished_at, message) values (%s, %s, %s, 'failed', 1, sysdate, sysdate, %s)",
+                (batch_id, dag_run_id, requested_mode, message[:4000]),
+            )
+        connection.commit()
 
 
 def previous_batch(batch_id):

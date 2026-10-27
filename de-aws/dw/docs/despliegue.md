@@ -53,6 +53,7 @@ Usuario `airflow` y la contraseña del paso anterior.
 | Cambio SCD tipo 2 | `dw_source_ops` `{"action": "simulate_changes"}` y luego `dw_pipeline` |
 | Repetir un lote exitoso | `dw_pipeline` con `{"batch_id": "<id>", "mode": "reprocess"}` |
 | Fallo controlado | `dw_pipeline` con `{"simulate_failure": true}`; luego *Clear* de `failure_injection` |
+| Dashboard | Suscripción a QuickSight, fuente de datos y dataset sobre `marts.rpt_sales_dashboard`: ver [quicksight.md](quicksight.md) |
 
 `dw_pipeline` también corre todos los días a las 06:00 (America/Bogota) en modo `auto`. El detalle de cada escenario y las consultas de evidencia están en [operacion_y_evidencias.md](operacion_y_evidencias.md).
 

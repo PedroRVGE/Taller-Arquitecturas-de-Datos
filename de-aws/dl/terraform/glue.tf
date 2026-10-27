@@ -191,16 +191,17 @@ locals {
     pipeline_runs = {
       location    = "control/run_log/"
       format      = "json"
-      description = "Control. Una fila por corrida con sus conteos y su estado."
+      description = "Control. Una fila por procesamiento de una corrida (nueva, repetida, recuperada o reconstruida) con sus conteos y su estado."
       partitions  = []
       columns = [
         ["run_id", "string", "Corrida"],
-        ["mode", "string", "new | reprocess | rebuild"],
+        ["mode", "string", "new (extracción de los RSS) | reprocess (desde Bronze) | rebuild"],
         ["status", "string", "complete | partial | failed"],
         ["started_at", "string", "Inicio (UTC)"],
         ["finished_at", "string", "Fin (UTC)"],
         ["sources_ok", "array<string>", "Fuentes con respuesta válida"],
         ["sources_failed", "array<string>", "Fuentes no disponibles o inválidas"],
+        ["sources_reused", "array<string>", "Fuentes procesadas desde Bronze sin consultar el RSS"],
         ["failed_tasks", "array<string>", "Tareas fallidas"],
         ["received", "int", "Ítems recibidos en los XML"],
         ["rejected", "int", "Ítems enviados a cuarentena"],
@@ -209,8 +210,10 @@ locals {
         ["updated", "int", "Noticias con contenido cambiado"],
         ["repeated", "int", "Noticias ya conocidas sin cambios"],
         ["unique_news_current", "bigint", "Noticias vigentes en Silver tras la corrida"],
+        ["news_without_valid_date", "int", "Noticias vigentes sin fecha de publicación válida (fuera de los agregados diarios)"],
         ["comprehend_calls", "int", "Textos enviados a Comprehend"],
         ["comprehend_cached", "int", "Textos reutilizados de la caché"],
+        ["comprehend_errors", "int", "Textos que Comprehend no pudo analizar"],
         ["partitions_published", "int", "Particiones creadas o actualizadas en Glue"],
         ["bytes_scanned_with_filter", "bigint", "Bytes escaneados por Athena con filtro de partición"],
         ["bytes_scanned_without_filter", "bigint", "Bytes escaneados por Athena sin filtro"],

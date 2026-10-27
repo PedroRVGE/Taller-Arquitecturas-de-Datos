@@ -15,6 +15,7 @@
 | `COMMIT` de `load_redshift` | `loaded` | **Aquí avanza**: se escribe `ops.batch_entities` en la misma transacción que el COPY |
 | `dbt.run_marts` | `transformed` | — |
 | `record_result` | `success` o `failed` con las tareas fallidas | Un lote `failed` no aporta marca; el siguiente vuelve a extraer desde la anterior y `stg_*` deduplica |
+| Falla `validate_connections` o `resolve_batch` | `record_result` inserta el lote como `failed` con el motivo (si Redshift responde); un lote ya registrado no se modifica | — |
 
 ## Guía de evidencias paso a paso
 
@@ -38,9 +39,9 @@ Los pasos van en orden: cada escenario parte del estado que deja el anterior. La
 | Captura | Dónde | Qué debe verse |
 | --- | --- | --- |
 | `00-terraform-apply.png` | Terminal | `Apply complete! Resources: … added` y la salida de `terraform output` |
-| `01-s3-bucket.png` | S3 → bucket `de-aws-…` → *Permissions* | *Block all public access: On* y cifrado por defecto |
-| `02-fuentes-rds-docdb.png` | RDS → *Databases* | La instancia MySQL y el clúster DocumentDB en *Available* |
-| `03-redshift-workgroup.png` | Redshift Serverless → *Workgroups* | Workgroup *Available* y, en *Limits*, el límite diario de RPU-hora |
+| `01-s3-bucket-a.png`, `01-s3-bucket-b.png` | S3 → bucket `de-aws-…` → *Permissions* | *Block all public access: On* y cifrado por defecto |
+| `02-fuentes-rds-docdb-a.png`, `02-fuentes-rds-docdb-b.png` | RDS → *Databases* y Amazon DocumentDB → *Clusters* (DocumentDB tiene consola propia) | La instancia MySQL y el clúster DocumentDB en *Available* |
+| `03-redshift-workgroup-a.png`, `03-redshift-workgroup-b.png` | Redshift Serverless → *Workgroups* | Workgroup *Available* y, en *Limits*, el límite diario de RPU-hora |
 | `04-ec2-airflow.png` | EC2 → *Instances* | Instancia de Airflow *Running* |
 
 ![Terraform apply](evidencias/00-terraform-apply.png)
@@ -76,15 +77,17 @@ Con `seed=42` y `bad_records=2` los generadores son los de DE-DW y los conteos c
 | Captura | Qué debe verse |
 | --- | --- |
 | `10-source-ops-generate.png` | `dw_source_ops` en verde |
-| `11-pipeline-carga-inicial.png` | Graph de `dw_pipeline` con las 7 etapas en verde: validación, extracción, carga, dbt, pruebas, conciliación y `record_result` |
+| `11-pipeline-carga-inicial-a.png`, `11-pipeline-carga-inicial-b.png` | Graph de `dw_pipeline` con las 7 etapas en verde: validación, extracción, carga, dbt, pruebas, conciliación y `record_result` |
 | `12-s3-lote.png` | Carpeta `batch_id=<id>` con el archivo de datos y el manifiesto |
 | `13-s3-manifiesto.png` | Contenido del `_manifest.json`: lote, fecha de extracción, filas, modo y watermark |
-| `14-dbt-test.png` | Log de `dbt.test` con `PASS=…  ERROR=0` (pruebas de unicidad, obligatorios, relaciones y reglas de negocio) |
-| `15-redshift-carga-inicial.png` | `ops.batch_runs` con el lote en `success` y modo `full`, y los conteos de los hechos |
+| `14-dbt-test-a.png`, `14-dbt-test-b.png` | Log de `dbt.test` con `PASS=…  ERROR=0` (pruebas de unicidad, obligatorios, relaciones y reglas de negocio) |
+| `15-redshift-carga-inicial-a.png` a `-c.png` | `ops.batch_runs` con el lote en `success` y modo `full`, y los conteos de los hechos |
 | `16-conciliacion.png` | `ops.reconciliation` con `passed = true` en todas las verificaciones |
 
-![Pipeline carga inicial](evidencias/11-pipeline-carga-inicial.png)
-![dbt test](evidencias/14-dbt-test.png)
+![Pipeline carga inicial](evidencias/11-pipeline-carga-inicial-a.png)
+![Pipeline carga inicial, detalle](evidencias/11-pipeline-carga-inicial-b.png)
+![dbt test](evidencias/14-dbt-test-a.png)
+![dbt test, resumen](evidencias/14-dbt-test-b.png)
 ![Conciliación](evidencias/16-conciliacion.png)
 
 ### Paso 2. Registros defectuosos
@@ -104,10 +107,11 @@ select (select count(*) from intermediate.stg_mysql__order_items) as stg,
 
 | Captura | Qué debe verse |
 | --- | --- |
-| `20-cuarentena-motivos.png` | Rechazos por entidad, motivo y lote de origen |
+| `20-cuarentena-motivos-a.png`, `20-cuarentena-motivos-b.png` | Rechazos por entidad, motivo y lote de origen |
 | `21-stg-valid-quarantine.png` | `stg = valid + quarantine` |
 
-![Cuarentena](evidencias/20-cuarentena-motivos.png)
+![Cuarentena](evidencias/20-cuarentena-motivos-a.png)
+![Cuarentena, continuación](evidencias/20-cuarentena-motivos-b.png)
 
 ### Paso 3. Repetir un lote exitoso
 
@@ -150,7 +154,7 @@ Cada hecho crece en 3 filas (253 → 256, 150 → 153, 500 → 503, igual que en
 | Captura | Qué debe verse |
 | --- | --- |
 | `40-append-batch.png` | Log de `dw_source_ops` con `3 new orders` |
-| `41-pipeline-incremental.png` | Graph de `dw_pipeline` en verde |
+| `41-pipeline-incremental-a.png`, `41-pipeline-incremental-b.png` | Graph de `dw_pipeline` en verde |
 | `42-batch-entities-incremental.png` | `extraction_mode = incremental`, `extracted_rows` = 3 en pedidos y watermark desde/hasta |
 | `43-hechos-incremental.png` | Conteos de los hechos con +3 |
 
@@ -178,25 +182,31 @@ Aparecen dos versiones: la anterior con `valid_to = 2025-07-01` y la vigente con
 
 ### Paso 6. Fallo controlado y reejecución
 
-1. Disparar `dw_pipeline` con `{"simulate_failure": true}`. Falla `failure_injection` después de confirmar la carga en `raw`; `record_result` marca el lote `failed`.
-2. Recuperar con una de dos opciones:
-   - En la vista *Grid*, clic en `failure_injection` → *Clear* con *Downstream* marcado. El marcador en `control/failure_injection/` hace que la tarea pase en el segundo intento.
-   - O disparar de nuevo con `{"batch_id": "<id>", "mode": "reprocess"}`.
-3. Verificar que no hay pérdida ni duplicados:
+El lote que falla debe traer filas nuevas; si no, "sin pérdida ni duplicados" no demuestra nada.
+
+1. Disparar `dw_source_ops` con `{"action": "append_batch", "batch_number": 3}`.
+2. Disparar `dw_pipeline` con `{"simulate_failure": true}`. Falla `failure_injection` después de confirmar la carga en `raw` (las 3 filas nuevas ya están en `"raw".mysql_order_items`); `record_result` marca el lote `failed`.
+3. Recuperar con una de dos opciones:
+   - En la vista *Grid*, clic en `failure_injection` → *Clear* con *Downstream* marcado. El marcador en `control/failure_injection/` hace que la tarea pase en el segundo intento. `attempts` se queda en 1: *Clear* no vuelve a ejecutar `resolve_batch`.
+   - O disparar de nuevo con `{"batch_id": "<id>", "mode": "reprocess"}`. Reutiliza los archivos del lote en S3 y `attempts` sube a 2.
+4. Verificar que no hay pérdida ni duplicados:
 
 ```sql
 select batch_id, status, attempts, message from ops.batch_runs where batch_id = '<id>';
 select count(*), count(distinct order_item_id) from "raw".mysql_order_items where _batch_id = '<id>';
+select count(*) as lineas, count(distinct sale_sk) as llaves from marts.fct_sales;
 select * from ops.reconciliation where batch_id = '<id>';
 ```
+
+Resultado esperado: el lote en `success`; 3 filas y 3 llaves distintas en raw para el lote; `fct_sales` pasa de 256 a 259 líneas, todas distintas; conciliación en `true`.
 
 | Captura | Qué debe verse |
 | --- | --- |
 | `60-fallo-grid.png` | `failure_injection` en rojo y las tareas siguientes en `upstream_failed` |
-| `61-fallo-log.png` | Log con `[batch=<id> task=failure_injection] Fallo controlado…`: identifica lote y tarea |
+| `61-fallo-log-a.png`, `61-fallo-log-b.png` | Log con `[batch=<id> task=failure_injection] Fallo controlado…`: identifica lote y tarea |
 | `62-fallo-estado.png` | `ops.batch_runs` con el lote en `failed` y el mensaje con la tarea fallida |
 | `63-recuperado-grid.png` | El mismo run en verde después del *Clear* |
-| `64-recuperado-sql.png` | Lote en `success`, `attempts = 2`, `count = count distinct` y conciliación en `true` |
+| `64-recuperado-sql-a.png`, `64-recuperado-sql-b.png` | Lote en `success` (`attempts = 1` con *Clear*, 2 con `reprocess`), 3 filas = 3 distintas en raw, 259 líneas en `fct_sales` y conciliación en `true` |
 
 ![Fallo](evidencias/60-fallo-grid.png)
 ![Recuperado](evidencias/63-recuperado-grid.png)
@@ -218,18 +228,18 @@ where category = 'Electrónica';
 | `72-sql-validacion-kpi.png` | La consulta de validación con el mismo valor y la misma fecha que la captura anterior |
 | `73-spice-refresh.png` | Solo con SPICE: *Dataset → Refresh* con la última actualización exitosa |
 
-![Dashboard](evidencias/70-quicksight-dashboard.png)
 ![Validación](evidencias/72-sql-validacion-kpi.png)
 
 ### Paso 8. Demostración: un lote nuevo hasta el dashboard
 
-1. `dw_source_ops` con `{"action": "append_batch", "batch_number": 3}` y luego `dw_pipeline` en `auto`.
+1. `dw_source_ops` con `{"action": "append_batch", "batch_number": 4}` (el siguiente número libre) y luego `dw_pipeline` en `auto`.
 2. Si el dataset es SPICE, *Refresh now*.
 3. El KPI sin filtro aumenta en el subtotal de las 3 líneas nuevas y `data_refreshed_at` cambia.
 
 | Captura | Qué debe verse |
 | --- | --- |
-| `80-demo-dashboard-despues.png` | El KPI y la fecha de actualización después del lote 3 |
+| `80-demo-dashboard-despues.png` | El KPI y la fecha de actualización en el dashboard después del lote nuevo |
+| `80-demo-sql-despues.png` | La consulta de validación sin filtro: líneas y ventas totales antes y después del lote |
 
 ### Paso 9. Eliminar los recursos
 

@@ -159,11 +159,13 @@ def failure_injection(batch, **context):
     """
     if not context["params"].get("simulate_failure"):
         return "sin fallo simulado"
+    log = batch_log(batch["batch_id"], "failure_injection")
     key = f"control/failure_injection/batch_id={batch['batch_id']}"
     if put_marker_once(bucket_name(), key, b"fallo controlado"):
-        raise AirflowFailException(
-            f"Fallo controlado del lote {batch['batch_id']} después de cargar raw. Limpie esta tarea para reanudar."
-        )
+        message = f"Fallo controlado del lote {batch['batch_id']} después de cargar raw. Limpie esta tarea para reanudar."
+        log.error(message)
+        raise AirflowFailException(message)
+    log.info("Fallo ya simulado para este lote; se continúa")
     return "fallo ya simulado para este lote; se continúa"
 
 
@@ -231,5 +233,14 @@ def record_result(**context):
         message = f"Tareas fallidas: {', '.join(failed)}" if failed else "Pipeline completo"
         redshift.set_status(batch_id, status, message)
         log.info("Lote %s -> %s. %s", batch_id, status, message)
+    elif failed:
+        # Falló validate_connections o resolve_batch: el lote no llegó a registrarse.
+        # Se deja constancia en ops.batch_runs, salvo que Redshift sea justamente lo que falló.
+        message = f"Tareas fallidas antes de registrar el lote: {', '.join(failed)}"
+        try:
+            redshift.record_failed_batch(batch_id, dag_run.run_id, context["params"].get("mode", "auto"), message)
+            log.info("Lote %s -> failed. %s", batch_id, message)
+        except Exception:  # noqa: BLE001 - el fallo original es el que importa
+            log.exception("No fue posible registrar el lote fallido en ops.batch_runs")
     if failed:
         raise AirflowFailException(f"El lote {batch_id} terminó con tareas fallidas: {failed}")
