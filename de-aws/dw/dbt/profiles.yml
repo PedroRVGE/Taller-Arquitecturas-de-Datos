@@ -1,0 +1,16 @@
+# Perfil de dbt para Redshift Serverless. Sin secretos: todo llega por variables de entorno
+# que la EC2 genera desde Secrets Manager.
+ecommerce_dw:
+  target: redshift
+  outputs:
+    redshift:
+      type: redshift
+      host: "{{ env_var('REDSHIFT_HOST') }}"
+      port: "{{ env_var('REDSHIFT_PORT', '5439') | as_number }}"
+      dbname: "{{ env_var('REDSHIFT_DATABASE') }}"
+      user: "{{ env_var('REDSHIFT_USER') }}"
+      password: "{{ env_var('REDSHIFT_PASSWORD') }}"
+      schema: intermediate
+      sslmode: require
+      threads: 4  # Redshift admite escritores concurrentes; DuckDB obligaba a un solo hilo
+      connect_timeout: 30

@@ -1,0 +1,161 @@
+"""Recorre el DAG completo en local (sin Athena) y verifica los escenarios del taller."""
+
+import json
+from datetime import datetime, timezone
+
+import pytest
+from conftest import AirflowFailException
+from newslake import airflow_tasks as tasks
+from newslake import storage
+from newslake.settings import sources
+
+SEQUENCE = ("transform_silver", "enrich_comprehend", "publish_silver", "build_gold", "failure_injection",
+            "update_glue_catalog")
+
+
+class FakeDate:
+    def __init__(self, value):
+        self.value = value
+
+    def in_timezone(self, _):
+        return self.value
+
+
+class FakeTI:
+    def __init__(self, task_id, state=None):
+        self.task_id = task_id
+        self.state = state
+
+
+class FakeDagRun:
+    def __init__(self):
+        self.start_date = datetime.now(timezone.utc)
+        self.states = {}
+
+    def get_task_instances(self):
+        return [FakeTI(task_id, state) for task_id, state in self.states.items()]
+
+
+def run_dag(day, **params):
+    """Ejecuta las tareas en orden, como el scheduler. Devuelve la bitácora de la corrida."""
+    defaults = {"run_id": "", "reprocess_run_id": "", "rebuild_from_bronze": False, "simulate_change_from_run": "",
+                "unavailable_source": "", "simulate_failure": False}
+    dag_run = FakeDagRun()
+    context = {"params": {**defaults, **params}, "logical_date": FakeDate(datetime(2026, 10, day, 12)),
+               "dag_run": dag_run, "ti": FakeTI("record_run_status")}
+
+    tasks.validate_access(**context)
+    for source in sources():
+        try:
+            tasks.ingest_source(source["id"], **context)
+            dag_run.states[f"ingest_bronze.{source['id']}"] = "success"
+        except AirflowFailException:
+            dag_run.states[f"ingest_bronze.{source['id']}"] = "failed"
+    for name in SEQUENCE:
+        try:
+            getattr(tasks, name)(**context)
+            dag_run.states[name] = "success"
+        except AirflowFailException:
+            dag_run.states[name] = "failed"
+            break
+    try:
+        tasks.record_run_status(**context)
+    except AirflowFailException:
+        pass
+    run = tasks.run_info(context)
+    return json.loads(storage.get(f"control/run_log/{run['run_id']}.json")), run
+
+
+def gold_matches_silver():
+    news = storage.read_published_rows("news")
+    gold = storage.read_published_rows("gold_news_daily")
+    expected = {}
+    for row in news:
+        if row["published_date"] != "unknown":
+            key = (row["published_date"], row["media"], row["section"])
+            expected[key] = expected.get(key, 0) + 1
+    return expected == {(g["published_date"], g["media"], g["section"]): g["news_count"] for g in gold}
+
+
+def test_full_scenarios(aws, comprehend, feeds):
+    # 1. Carga inicial
+    log, first = run_dag(1)
+    assert log["status"] == "complete"
+    assert log["received"] == 30
+    assert log["new"] == log["unique_news_current"] > 0
+    assert log["new"] + log["duplicates_in_batch"] + log["rejected"] == log["received"]
+    assert log["comprehend_calls"] == comprehend.calls == log["new"]
+    news = storage.read_published_rows("news")
+    assert len(news) == len({row["news_id"] for row in news}) == log["unique_news_current"]
+    assert all(row["enrichment_status"] == "analyzed" for row in news)
+    entity_news = {row["news_id"] for row in storage.read_published_rows("news_entities")}
+    assert entity_news <= {row["news_id"] for row in news}
+    assert gold_matches_silver()
+    bronze_keys = list(storage.list_keys("bronze/"))
+    assert len([k for k in bronze_keys if k.endswith("feed.xml")]) == 3
+
+    # 2. Repetir la misma corrida: reutiliza Bronze, sin duplicados ni llamadas nuevas
+    calls = comprehend.calls
+    log, _ = run_dag(1)
+    assert log["status"] == "complete" and log["new"] == 0 and log["repeated"] == log["unique_news_current"]
+    assert log["partitions_published"] == 0 and comprehend.calls == calls
+    assert list(storage.list_keys("bronze/")) == bronze_keys
+    assert len(storage.read_published_rows("news")) == log["unique_news_current"]
+
+    # 3. Nueva corrida con el mismo contenido: nada se reescribe
+    log, _ = run_dag(2)
+    assert log["new"] == 0 and log["partitions_published"] == 0 and comprehend.calls == calls
+
+    # 4. Noticia modificada (copia controlada): solo se reanaliza lo que cambió
+    log, _ = run_dag(3, simulate_change_from_run=first["run_id"])
+    assert log["updated"] == 3 and comprehend.calls == calls + 3
+    updated = [row for row in storage.read_published_rows("news") if row["version"] == 2]
+    assert len(updated) == 3 and all(row["title"].endswith("(actualizada)") for row in updated)
+    assert gold_matches_silver()
+
+    # 5. Fuente no disponible: corrida parcial, las noticias de esa fuente no desaparecen
+    before = len(storage.read_published_rows("news"))
+    log, _ = run_dag(4, unavailable_source="eltiempo_deportes")
+    assert log["status"] == "partial" and log["sources_failed"] == ["eltiempo_deportes"]
+    assert len(storage.read_published_rows("news")) == before
+
+    # 6. Fallo controlado entre archivos y Glue, y recuperación
+    log, failed_run = run_dag(5, simulate_change_from_run=first["run_id"], simulate_failure=True)
+    assert log["status"] == "failed" and "failure_injection" in log["failed_tasks"]
+    log, _ = run_dag(5, simulate_change_from_run=first["run_id"], simulate_failure=True)
+    assert log["status"] == "complete"
+    assert gold_matches_silver()
+
+    # 7. Reconstrucción desde Bronze: mismo resultado, sin consultar RSS ni Comprehend
+    calls = comprehend.calls
+    news_before = sorted((r["news_id"], r["content_hash"], r["version"]) for r in storage.read_published_rows("news"))
+    log, _ = run_dag(6, rebuild_from_bronze=True)
+    assert log["status"] == "complete" and comprehend.calls == calls
+    news_after = sorted((r["news_id"], r["content_hash"], r["version"]) for r in storage.read_published_rows("news"))
+    assert news_after == news_before
+    assert gold_matches_silver()
+
+
+def test_reprocess_unknown_run_fails(aws, comprehend, feeds):
+    log, _ = run_dag(1, reprocess_run_id="no-existe")
+    assert log["status"] == "failed"
+    assert sorted(log["sources_failed"]) == sorted(s["id"] for s in sources())
+
+
+def test_partition_publish_is_atomic(aws, comprehend, feeds):
+    """Con fallo antes de Glue, Athena (los punteros de Glue) sigue viendo la versión anterior."""
+    run_dag(1)
+    before = {k: v["location"] for k, v in storage.published_partitions("news").items()}
+    run_dag(2, simulate_change_from_run="r20261001T120000Z", simulate_failure=True)
+    after = {k: v["location"] for k, v in storage.published_partitions("news").items()}
+    assert before == after
+
+
+@pytest.mark.parametrize("bad_id", ["../x", "", "a" * 70])
+def test_run_id_validation(bad_id):
+    context = {"params": {"run_id": bad_id}, "logical_date": FakeDate(datetime(2026, 1, 1))}
+    if bad_id == "":
+        assert tasks.run_info(context)["run_id"].startswith("r2026")
+    else:
+        with pytest.raises(AirflowFailException):
+            tasks.run_info(context)

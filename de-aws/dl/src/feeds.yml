@@ -1,0 +1,22 @@
+# Fuentes RSS del data lake. La página https://www.eltiempo.com/rss es el directorio;
+# cada sección tiene su propio feed XML.
+media: El Tiempo
+language: es            # idioma enviado a Comprehend
+request_timeout_seconds: 20
+user_agent: "de-aws-newslake/1.0 (curso Ingenieria de Datos, Universidad EIA)"
+
+sources:
+  - id: eltiempo_economia
+    section: Economía
+    url: https://www.eltiempo.com/rss/economia.xml
+  - id: eltiempo_politica
+    section: Política
+    url: https://www.eltiempo.com/rss/politica.xml
+  - id: eltiempo_deportes
+    section: Deportes
+    url: https://www.eltiempo.com/rss/deportes.xml
+
+comprehend:
+  supported_languages: [es, en, pt, fr, de, it]
+  max_text_bytes: 4500       # textos más largos se recortan y quedan con estado "truncated"
+  entity_types: [PERSON, ORGANIZATION, LOCATION]

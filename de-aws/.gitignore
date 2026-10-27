@@ -1,0 +1,23 @@
+# Terraform: el state contiene secretos y los providers pesan cientos de MB.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
+backend.tf
+# Se versiona .terraform.lock.hcl (fija las versiones de los providers).
+
+# Secretos y configuración local
+.env
+*.pem
+
+# Python y dbt
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+dw/dbt/target/
+dw/dbt/dbt_packages/
+dw/dbt/logs/

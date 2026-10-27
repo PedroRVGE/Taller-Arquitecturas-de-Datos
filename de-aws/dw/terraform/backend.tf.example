@@ -1,0 +1,13 @@
+# Backend remoto: el state vive en S3, cifrado y versionado, con bloqueo nativo
+# (use_lockfile, Terraform >= 1.10). El bucket del state se crea UNA vez, aparte,
+# porque Terraform no puede guardar su state en un bucket que él mismo está creando.
+terraform {
+  backend "s3" {
+    bucket       = "REEMPLAZA-tfstate-bucket"
+    key          = "de-aws/dw/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+    # Versiones anteriores a 1.10: dynamodb_table = "terraform-locks"
+  }
+}

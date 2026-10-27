@@ -1,0 +1,17 @@
+# Copia este archivo a terraform.tfvars (no se versiona) y ajusta los valores.
+aws_region   = "us-east-1"
+project_name = "de-aws"
+environment  = "dev"
+owner        = "tu-usuario"
+
+# Tu IP pública con /32 (curl -s https://checkip.amazonaws.com). Vacío = solo túnel de SSM.
+allowed_cidrs = ["203.0.113.10/32"]
+
+airflow_instance_type = "t3.medium"
+glue_database_name    = "news_lake"
+
+# Ejecución programada durante el laboratorio (cada 30 minutos, hora de Bogotá).
+pipeline_schedule = "*/30 * * * *"
+
+# AWS Academy / Learner Lab:
+# existing_instance_profile_name = "LabInstanceProfile"

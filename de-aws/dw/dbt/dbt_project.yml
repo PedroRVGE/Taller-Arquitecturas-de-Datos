@@ -1,0 +1,49 @@
+name: ecommerce_dw
+version: '2.0.0'
+config-version: 2
+profile: ecommerce_dw
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  ecommerce_dw:
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+    quarantine:
+      +schema: quarantine
+      +materialized: table
+    marts:
+      +schema: marts
+      +materialized: table
+
+snapshots:
+  ecommerce_dw:
+    +schema: snapshots
+
+seeds:
+  ecommerce_dw:
+    +schema: seeds
+    colombia_holidays:
+      +column_types:
+        date: date
+        holiday_name: varchar(256)
+    colombia_municipalities:
+      +column_types:
+        country: varchar(128)
+        department: varchar(256)
+        city: varchar(256)
+
+vars:
+  valid_sales_channels: ['web', 'móvil', 'tienda']
+  valid_event_types: ['vista_producto', 'busqueda', 'agregar_carrito']
+  business_timezone: 'America/Bogota'
+  date_dimension_start: '2025-01-01'
+  date_dimension_end: '2028-01-01'  # fin exclusivo, compatible con dbt_utils.date_spine
+  incremental_lookback_days: 7  # días recientes que se reprocesan para absorber datos tardíos
+  batch_id: 'manual'  # Airflow lo envía con --vars para trazar cada corrida

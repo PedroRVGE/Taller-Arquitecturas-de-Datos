@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: quarantine_mysql__customers
+    description: Clientes rechazados por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_mysql__products
+    description: Productos rechazados por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_mysql__orders
+    description: Pedidos rechazados por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_mysql__order_items
+    description: Líneas de pedido rechazadas por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_mongodb__reviews
+    description: Reseñas rechazadas por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_mongodb__navigation_events
+    description: Eventos de navegación rechazados por calidad de datos, con su motivo en rejection_reason.
+  - name: quarantine_rejections_log
+    description: "Historial de rechazos por lote. Grano: registro x motivo x lote de origen. detected_in_batch_id es el lote del pipeline que lo detectó por primera vez."
+    columns:
+      - name: rejection_sk
+        tests: [unique, not_null]
+      - name: rejection_reason
+        tests: [not_null]
+      - name: source_batch_id
+        tests: [not_null]

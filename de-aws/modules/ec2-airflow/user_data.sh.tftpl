@@ -1,0 +1,52 @@
+#!/bin/bash
+# Arranque de la EC2 de Airflow. Terraform renderiza esta plantilla (templatefile);
+# las expresiones entre llaves con signo de dólar se sustituyen antes de llegar a la instancia.
+set -euxo pipefail
+exec > >(tee -a /var/log/de-aws-bootstrap.log) 2>&1
+
+dnf install -y docker jq
+systemctl enable --now docker
+usermod -aG docker ec2-user
+
+# Docker Compose v2 y buildx como plugins del CLI de Docker.
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+curl -fsSL "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-amd64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-buildx
+
+# Script de despliegue reutilizable: se ejecuta ahora y cada vez que se publica código
+# nuevo (make <parte>-deploy-code lo invoca por SSM). Sincroniza el código, regenera
+# el .env desde Secrets Manager y levanta los contenedores.
+cat > /usr/local/bin/de-aws-deploy <<'DEPLOY'
+#!/bin/bash
+set -euo pipefail
+APP_DIR="${app_dir}"
+mkdir -p "$APP_DIR"
+aws s3 sync "s3://${bucket}/${code_prefix}/" "$APP_DIR/" --delete --region "${region}" \
+  --exclude ".env" --exclude "dbt/target/*" --exclude "dbt/dbt_packages/*" --exclude "dbt/logs/*"
+# Los contenedores corren con el UID 50000 (usuario airflow) y dbt escribe target/ y dbt_packages/.
+chown -R 50000:0 "$APP_DIR"
+
+umask 077
+{
+  aws secretsmanager get-secret-value --secret-id "${secret_arn}" --region "${region}" \
+    --query SecretString --output text | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+  aws s3 cp "s3://${bucket}/${config_key}" - --region "${region}"
+} > "$APP_DIR/.env.tmp"
+mv "$APP_DIR/.env.tmp" "$APP_DIR/.env"
+chmod 644 "$APP_DIR/.env"  # lo leen los contenedores con el usuario de Airflow
+
+cd "$APP_DIR"
+docker compose -f "$APP_DIR/${compose_file}" --env-file "$APP_DIR/.env" up -d --build --remove-orphans
+DEPLOY
+chmod 750 /usr/local/bin/de-aws-deploy
+
+# El código puede tardar unos segundos en estar disponible si Terraform aún sube objetos.
+for attempt in 1 2 3 4 5; do
+  if /usr/local/bin/de-aws-deploy; then
+    break
+  fi
+  sleep 30
+done
