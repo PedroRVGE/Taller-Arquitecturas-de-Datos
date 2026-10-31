@@ -5,6 +5,7 @@ Parámetros (Trigger DAG w/ config):
     reprocess_run_id          procesa una corrida existente solo desde Bronze
     rebuild_from_bronze       reconstruye Silver y Gold desde todas las corridas de Bronze
     simulate_change_from_run  copia controlada de un RSS de Bronze con una noticia modificada
+    simulate_defects_from_run copia controlada de un RSS de Bronze con tres ítems defectuosos
     unavailable_source        id de una fuente que se simula caída (corrida parcial)
     simulate_failure          falla una vez entre la escritura de archivos y Glue
 """
@@ -40,6 +41,7 @@ with DAG(
         "reprocess_run_id": Param("", type="string"),
         "rebuild_from_bronze": Param(False, type="boolean"),
         "simulate_change_from_run": Param("", type="string"),
+        "simulate_defects_from_run": Param("", type="string"),
         "unavailable_source": Param("", type="string"),
         "simulate_failure": Param(False, type="boolean"),
     },

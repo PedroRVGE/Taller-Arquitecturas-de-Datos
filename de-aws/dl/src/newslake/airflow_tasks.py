@@ -135,6 +135,11 @@ def ingest_source(source_id, **context):
             return bronze.make_fixture(source, run["run_id"], params["simulate_change_from_run"], log)
         except bronze.PermanentSourceError as error:
             raise AirflowFailException(str(error)) from error
+    if params.get("simulate_defects_from_run"):
+        try:
+            return bronze.make_defects_fixture(source, run["run_id"], params["simulate_defects_from_run"], log)
+        except bronze.PermanentSourceError as error:
+            raise AirflowFailException(str(error)) from error
 
     url = None
     if params.get("unavailable_source") == source_id:

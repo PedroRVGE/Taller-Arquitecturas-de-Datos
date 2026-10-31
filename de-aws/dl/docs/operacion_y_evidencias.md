@@ -28,6 +28,7 @@ Las tablas se definen en Terraform (sin crawlers). Las particiones se registran 
 | `reprocess_run_id` | Reprocesa esa corrida solo desde Bronze (sin consultar RSS) |
 | `rebuild_from_bronze` | Reconstruye Silver y Gold desde todas las corridas de Bronze, en orden cronológico, sin RSS ni Comprehend (usa la caché) |
 | `simulate_change_from_run` | Copia controlada: toma el Bronze de esa corrida y modifica el título de la primera noticia de cada feed |
+| `simulate_defects_from_run` | Copia controlada: toma el Bronze de esa corrida y agrega a cada feed tres copias defectuosas de la primera noticia (sin título, sin enlace y con enlace inválido) |
 | `unavailable_source` | Simula la caída de una fuente (URL inexistente, HTTP 404) |
 | `simulate_failure` | Falla una vez entre la escritura de archivos y la publicación en Glue |
 
@@ -38,7 +39,7 @@ Las consultas están en `sql/athena/` y también como *saved queries* del workgr
 | Escenario | Cómo se ejecuta | Evidencia |
 | --- | --- | --- |
 | Carga inicial | Primera corrida programada o manual | `09_bitacora_de_corridas.sql`: `status=complete`, `new = unique_news_current`; `01` a `05` devuelven datos |
-| Registros defectuosos | Ítems sin título o enlace en el RSS (o un fixture editado) | `11_cuarentena.sql` con `rejection_reason` y `bronze_key` |
+| Registros defectuosos | Ítems sin título o enlace en el RSS, o `{"simulate_defects_from_run": "<run_id anterior>"}` | `rejected = 9` (3 por feed); `11_cuarentena.sql` con `rejection_reason` (`missing_title`, `missing_link`, `invalid_link`) y `bronze_key` |
 | Repetición de un lote exitoso | Trigger con `{"run_id": "<id ya exitoso>"}` (o `{"reprocess_run_id": "<id>"}`) | El log de `ingest_bronze` dice "se reprocesa sin consultar el RSS"; en `pipeline_runs` aparece una fila nueva con `mode = reprocess`, `sources_reused` con las 3 fuentes, `new = 0`, `partitions_published = 0` y `comprehend_calls = 0`, y la fila de la primera ejecución conserva sus conteos; validación `v01` sin duplicados |
 | Nuevo lote incremental | La siguiente corrida programada | `new` solo con noticias nuevas; `comprehend_cached` crece y `comprehend_calls = new` |
 | Noticia modificada | `{"simulate_change_from_run": "<run_id anterior>"}` | `updated = 3`, `comprehend_calls = 3`; en `news`, `version = 2` y el título termina en "(actualizada)". La siguiente corrida real vuelve a traer el título original y lo registra como otro cambio (`version = 3`): tome las capturas antes o pause el DAG durante la demostración |

@@ -1,11 +1,12 @@
 locals {
   code_root = abspath("${path.module}/..")
 
+  # Solo se recorren las carpetas que corren en la EC2. Recorrer "**" incluiría terraform/,
+  # donde aparecen el plan y el state entre plan y apply, y fileset fallaría con
+  # "inconsistent result" en el apply.
   code_files = toset([
-    for file in fileset(local.code_root, "**") : file
-    if !startswith(file, "terraform/")
-    && !startswith(file, "docs/")
-    && !can(regex("(^|/)(\\.env|__pycache__|tests|\\.pytest_cache|\\.ruff_cache)(/|$)", file))
+    for file in flatten([for dir in ["airflow", "sql", "src"] : fileset(local.code_root, "${dir}/**")]) : file
+    if !can(regex("(^|/)(\\.env|__pycache__|\\.pytest_cache|\\.ruff_cache)(/|$)", file))
   ])
 
   code_version = substr(sha1(join("", [for file in sort(tolist(local.code_files)) : filemd5("${local.code_root}/${file}")])), 0, 12)

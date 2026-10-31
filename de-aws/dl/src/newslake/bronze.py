@@ -146,6 +146,46 @@ def make_fixture(source, run_id, from_run_id, log=LOGGER):
     return store_valid_response(run_id, source, ingested_at, content, 200, "fixture", log)
 
 
+DEFECTS = ("missing_title", "missing_link", "invalid_link")  # motivos esperados en cuarentena
+
+
+def _damage(item, reason):
+    if reason == "missing_title":
+        item.find("title").text = ""
+    elif reason == "missing_link":
+        item.remove(item.find("link"))
+    else:
+        item.find("link").text = "noticia-sin-esquema/123"
+
+
+def make_defects_fixture(source, run_id, from_run_id, log=LOGGER):
+    """Copia controlada de un RSS de Bronze con tres ítems defectuosos agregados.
+
+    Los ítems originales se conservan (quedan como repetidos); los agregados son copias del
+    primero con identificadores propios y un defecto cada uno, para demostrar la cuarentena.
+    """
+    original = existing_record(from_run_id, source["id"])
+    if not original or not original.get("bronze_key"):
+        raise PermanentSourceError(f"{source['id']}: la corrida {from_run_id} no tiene Bronze")
+    root = SafeElementTree.fromstring(storage.get(original["bronze_key"]))
+    channel = root.find("channel")
+    first = channel.find("item") if channel is not None else None
+    if first is None or first.find("title") is None or first.find("link") is None:
+        raise PermanentSourceError(f"{source['id']}: la corrida {from_run_id} no tiene ítems para copiar")
+    for reason in DEFECTS:
+        item = ElementTree.fromstring(ElementTree.tostring(first))
+        for tag in ("guid", "link"):
+            node = item.find(tag)
+            if node is not None and node.text:
+                node.text = f"{node.text.strip()}?defecto={reason}"
+        _damage(item, reason)
+        channel.append(item)
+    content = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    ingested_at = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    log.info("%s: fixture desde %s con ítems defectuosos: %s", source["id"], from_run_id, ", ".join(DEFECTS))
+    return store_valid_response(run_id, source, ingested_at, content, 200, "fixture", log)
+
+
 def runs_in_bronze():
     """Registros válidos de Bronze de todas las corridas, en orden cronológico (para rebuild)."""
     records = [storage.get_json(key) for key in storage.list_keys("control/bronze_log/") if key.endswith(".json")]

@@ -50,7 +50,7 @@ def latest_run_log(run_id):
 def run_dag(day, validation_ok=True, **params):
     """Ejecuta las tareas en orden, como el scheduler. Devuelve la bitácora de la corrida."""
     defaults = {"run_id": "", "reprocess_run_id": "", "rebuild_from_bronze": False, "simulate_change_from_run": "",
-                "unavailable_source": "", "simulate_failure": False}
+                "simulate_defects_from_run": "", "unavailable_source": "", "simulate_failure": False}
     dag_run = FakeDagRun()
     context = {"params": {**defaults, **params}, "logical_date": FakeDate(datetime(2026, 10, day, 12)),
                "dag_run": dag_run, "ti": FakeTI("record_run_status")}
@@ -164,6 +164,17 @@ def test_reprocess_unknown_run_fails(aws, comprehend, feeds):
     log, _ = run_dag(1, reprocess_run_id="no-existe")
     assert log["status"] == "failed"
     assert sorted(log["sources_failed"]) == sorted(s["id"] for s in sources())
+
+
+def test_defects_fixture_goes_to_quarantine(aws, comprehend, feeds):
+    _, first = run_dag(1)
+    calls = comprehend.calls
+    log, run = run_dag(2, simulate_defects_from_run=first["run_id"])
+    assert log["status"] == "complete"
+    assert log["rejected"] == 9 and log["new"] == 0 and comprehend.calls == calls  # 3 defectos por feed
+    rejected = storage.read_published_rows("news_quarantine")
+    assert sorted({r["rejection_reason"] for r in rejected}) == ["invalid_link", "missing_link", "missing_title"]
+    assert all(r["run_id"] == run["run_id"] and r["bronze_key"].startswith("bronze/") for r in rejected)
 
 
 def test_partition_publish_is_atomic(aws, comprehend, feeds):

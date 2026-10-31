@@ -5,7 +5,7 @@ Relación entre los requisitos del enunciado (`Actividad Arquitecturas de Datos.
 | Parte | Implementación | Evidencias |
 | --- | --- | --- |
 | 1. Data warehouse (`de-aws/dw`) | Completa | Escenarios de la sección 3.5 ejecutados en AWS el 2026-10-26; fallo controlado, dashboard de QuickSight y eliminación el 2026-10-30. Pendiente: correr en AWS las pruebas singulares de dbt (ver pendiente 1) |
-| 2. Data lake (`de-aws/dl`) | Completa, con pruebas locales | Pendientes: requiere despliegue en AWS |
+| 2. Data lake (`de-aws/dl`) | Completa, con pruebas locales | Escenarios de la sección 4.5 ejecutados en AWS el 2026-10-30 y eliminación verificada. Sin partición de fecha nueva (ver limitaciones) |
 
 ---
 
@@ -119,11 +119,37 @@ Resueltos el 2026-10-30: dashboard de QuickSight, nueva evidencia del fallo cont
 | 4.5 Publicación sin resultados parciales ni duplicados visibles; recuperación sin pérdida | `dl/src/newslake/storage.py`, `dl/docs/operacion_y_evidencias.md` |
 | 4.6 DAG en EC2 con las nueve etapas, programación, reintentos, logs por fuente, lote y tarea, control de concurrencia y parámetros de reproceso | `dl/airflow/dags/newslake_pipeline.py`, `dl/terraform/airflow.tf` |
 | Documentación (arquitectura, fuentes, diccionario, reglas, incrementalidad, despliegue, costos) | `dl/docs/` |
-| Pruebas locales de los escenarios (S3 y Glue simulados) | `dl/tests/`: 24 pruebas |
+| Pruebas locales de los escenarios (S3 y Glue simulados) | `dl/tests/`: 25 pruebas |
 
-### Pendiente: evidencias en AWS
+### Ejecución en AWS (2026-10-30, hora de Bogotá; `run_id` en UTC)
 
-1. Desplegar con Terraform desde `dl/terraform` según `dl/docs/despliegue_y_costos.md`.
-2. Ejecutar los escenarios de la sección 4.5 siguiendo `dl/docs/operacion_y_evidencias.md`: carga inicial, registros defectuosos, repetición, lote incremental, noticia modificada, fallo controlado, reproceso desde Bronze y nueva partición.
-3. Guardar en `dl/docs/evidencias/` las capturas del DAG, los archivos de Bronze, Silver y Gold, los resultados de Comprehend, las tablas y particiones de Glue, las consultas de Athena (incluida la comparación de bytes escaneados) y cada escenario.
-4. Pausar el DAG, ejecutar `terraform destroy` y verificar que no queden recursos.
+La infraestructura se creó con Terraform en `us-east-1` (94 recursos; EC2 `t3.medium`, DAG cada 30 minutos) y se eliminó con `terraform destroy` (94 recursos, con el DAG pausado antes). La AWS CLI no encontró instancias, volúmenes, bucket, base de Glue, workgroup, secretos, roles ni VPC del proyecto (captura `90`). Evidencias en `dl/docs/evidencias/`.
+
+| Corrida | Escenario | Resultado | Evidencia |
+| --- | --- | --- | --- |
+| `r20261031T033000Z` (programada) | Carga inicial | `complete`: 30 recibidas, 30 nuevas, 30 llamadas a Comprehend, 13 particiones publicadas | `00`, `10`, `30` |
+| `r20261031T033000Z` (repetida con `{"run_id": ...}`) | Repetición de un lote exitoso | Fila nueva con `mode = reprocess`, las 3 fuentes en `sources_reused`, `new = 0`, `repeated = 30`, 0 llamadas, 0 particiones; la fila original conserva sus conteos; `news` 30 filas = 30 `news_id` | `30`, `31` |
+| `r20261031T040720Z` | Registros defectuosos (`simulate_defects_from_run`) | 39 recibidas, 9 rechazadas (3 por feed: `missing_title`, `missing_link`, `invalid_link`) con `bronze_key`; 0 nuevas, 0 llamadas | `20` |
+| `r20261031T040836Z` | Noticia modificada (`simulate_change_from_run`) | `updated = 3`, 3 llamadas, 27 desde la caché, 6 particiones | `40` |
+| `r20261031T041003Z` | Fuente caída (`unavailable_source`) | `partial`, `sources_failed = [eltiempo_deportes]`; Deportes sigue con sus 10 noticias. La consulta real de Economía y Política devolvió los títulos originales (`updated = 2`, 0 llamadas: estaban en caché) | `80`, `81`, `82` |
+| `r20261031T041133Z` | Fallo controlado (`simulate_failure`) y *Clear* de `failure_injection` con *Downstream* | Primero `failed` en `failure_injection` sin publicar (Athena seguía mostrando la versión anterior, verificado con consulta; sin captura de ese momento); después del *Clear*, `complete`, 6 particiones, 30 filas = 30 `news_id` | `60`, `61`, `63`, `64` |
+| `r20261031T040000Z` (programada) | Corrida programada sin noticias nuevas | Los RSS eran idénticos a los de las 23:00: `new = 0`, `updated = 3` (vuelven los títulos reales), 0 llamadas (caché), 5 particiones. La partición `2026-10-31` pasó a `version=r20261031T040000Z` | `41`, `56` |
+| `rebuild20261031T043303Z` | Reproceso desde Bronze (`rebuild_from_bronze`) | Recorre las 179 noticias recibidas en todas las corridas, 0 llamadas a Comprehend; huella de (`news_id`, `content_hash`, `version`) igual antes y después (`8CCE6F…EA2E`) | `45` |
+| `r20261031T043000Z` (programada, 00:00) | Nuevo lote incremental | 1 noticia nueva de Política: `new = 1`, `comprehend_calls = 1 = new`, 30 desde la caché, `unique_news_current` 30 → 31; `news` 31 filas = 31 `news_id` | `41` |
+
+Consultas y validaciones sobre el estado de las 23:35, con 30 noticias (consultas 02, 07 y 08 con la fecha `2026-10-31` en lugar del ejemplo `2026-10-21`, que no tiene datos):
+
+| Medida | Resultado | Evidencia |
+| --- | --- | --- |
+| Consultas 01 a 05 y 12 | Devuelven datos | `70` a `73` |
+| Bytes escaneados con y sin filtro de partición (07 vs. 08) | 109 vs. 302 bytes, mismo resultado (15 noticias, 3 secciones); los mismos valores en `pipeline_runs` | `74` |
+| Validaciones `v01` a `v07` | `failures = 0` en todas | `75`, `76` |
+| Comprehend | 36 textos analizados (`es`, 0 truncados), 30 noticias `analyzed`; entidades con puntaje (p. ej. PERSON 0.999) | `77` |
+| Bronze, Silver, Gold y Glue | Estructura de carpetas, versiones publicadas y ubicación de cada partición | `50`, `55`, `56` |
+
+Las imágenes de Athena (`20`, `30`, `40`, `41`, `45`, `50`, `64`, `70` a `77`, `82`) son consultas ejecutadas en el workgroup `de-aws-dev-dl` con su resultado y bytes escaneados, renderizadas como imagen. `55` y `56` son salidas de la AWS CLI (`aws s3 ls`, `aws glue get-tables` y `get-partitions`), porque la extensión de Chrome no tuvo permiso para tomar capturas de la consola. Las de Airflow (`10`, `31`, `60`, `61`, `63`, `80`, `81`) son capturas de la interfaz.
+
+Limitaciones:
+
+- **Nueva partición.** Todas las noticias de los feeds eran del 30 y 31 de octubre (UTC), así que no apareció una fecha nueva después de la carga inicial, que fue la que creó las dos particiones (`CreationTime` en `56`). Lo que se ve en vivo es el cambio de ubicación de una partición existente al publicar una versión nueva. Una partición nueva aparece con la primera noticia del 1 de noviembre UTC (19:00 en Bogotá).
+- La organización `1` en la consulta 03 es una entidad que Comprehend detectó en un texto; se deja como dato de origen.
