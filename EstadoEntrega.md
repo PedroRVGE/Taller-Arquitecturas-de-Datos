@@ -4,7 +4,7 @@ Relación entre los requisitos del enunciado (`Actividad Arquitecturas de Datos.
 
 | Parte | Implementación | Evidencias |
 | --- | --- | --- |
-| 1. Data warehouse (`de-aws/dw`) | Completa | Escenarios de la sección 3.5 ejecutados en AWS el 2026-10-26. Pendientes: dashboard de QuickSight, nueva captura del fallo controlado y captura de la eliminación |
+| 1. Data warehouse (`de-aws/dw`) | Completa | Escenarios de la sección 3.5 ejecutados en AWS el 2026-10-26; fallo controlado, dashboard de QuickSight y eliminación el 2026-10-30. Pendiente: correr en AWS las pruebas singulares de dbt (ver pendiente 1) |
 | 2. Data lake (`de-aws/dl`) | Completa, con pruebas locales | Pendientes: requiere despliegue en AWS |
 
 ---
@@ -21,8 +21,18 @@ La infraestructura se creó con Terraform en `us-east-1` (131 recursos) y se eli
 | `b20261025T110000Z` | Repetición de un lote exitoso (`reprocess`) | `attempts = 2`, conteos sin cambios |
 | `b20261027T032447Z` | Nuevo lote incremental (lote 2) | +3 filas en cada hecho |
 | (paso 5) | Cambio en atributo historizado | Nueva versión SCD2 del cliente 1 y cierre de la anterior |
-| `b20261027T033805Z` | Fallo controlado y reejecución | Recuperado con *Clear*. El lote no traía filas nuevas; ver pendiente 2 |
+| `b20261027T033805Z` | Fallo controlado y reejecución | Recuperado con *Clear*. El lote no traía filas nuevas; se repitió el 2026-10-30 (fila siguiente) |
 | (lote 3) | Lote nuevo hasta el indicador | Ventas totales 7 357 260.42 → 7 420 730.58 (256 → 259 líneas) |
+
+Segunda ejecución (2026-10-30, 132 recursos con la fuente de datos de QuickSight), para los escenarios que quedaron pendientes. Los pasos 1 a 5 se repitieron con los mismos resultados (253 / 150 / 500 → 256 / 153 / 503 y SCD2 del cliente 1):
+
+| Lote | Escenario | Resultado |
+| --- | --- | --- |
+| `b20261030T232516Z` | Fallo controlado con lote 3 (`append_batch` 3) | `failed` con las 3 filas nuevas ya en `raw`; recuperado con *Clear* de `failure_injection`: `success`, `attempts = 1`, 3 filas = 3 distintas en `raw`, `fct_sales` 256 → 259 = 259 llaves, conciliación `true` (capturas `60` a `64`) |
+| — | Dashboard de QuickSight (Direct Query) | KPI 7 420 730.58 sin filtro y 541 641.20 con `category = Electrónica` (22 líneas), igual a la consulta de validación y con la misma fecha de actualización (capturas `70` a `72`) |
+| `b20261031T021602Z` | Lote 4 hasta el dashboard | 7 420 730.58 → 7 484 200.74 (259 → 262 líneas) en el dashboard y en `ops.reconciliation` (capturas `80-*`) |
+
+Las capturas `62`, `64-*`, `72` y `80-demo-sql-despues` muestran consultas ejecutadas en Redshift (workgroup del despliegue, usuario `dw_admin`) con su resultado, renderizadas como imagen en lugar de capturas del Query Editor v2.
 
 Los conteos coinciden con los de la versión local (DE-DW):
 
@@ -62,12 +72,12 @@ Los conteos coinciden con los de la versión local (DE-DW):
 | 3.5 Repetición de un lote exitoso | Cumplido | — | `30`, `31`, `32` |
 | 3.5 Nuevo lote incremental | Cumplido | — | `40` a `43` |
 | 3.5 Cambio en un atributo historizado | Cumplido | — | `50`, `51` |
-| 3.5 Fallo controlado y reejecución | Cumplido; evidencia por repetir (pendiente 2) | — | `60` a `64` |
-| 3.5 Pruebas de unicidad, obligatorios, relaciones y reglas de negocio | Cumplido | `dw/dbt/models/**/*.yml`, `dw/dbt/tests/` | `14-dbt-test-a/b` |
+| 3.5 Fallo controlado y reejecución | Cumplido | — | `60` a `64` |
+| 3.5 Pruebas de unicidad, obligatorios, relaciones y reglas de negocio | Cumplido en los modelos; pruebas singulares sin ejecutar en AWS (pendiente 1) | `dw/dbt/models/**/*.yml`, `dw/dbt/tests/` | `14-dbt-test-a/b` |
 | 3.5 Conciliación de un indicador agregado | Cumplido | Tarea `reconcile`, `ops.reconciliation` | `16-conciliacion` |
 | 3.5 Identificación del lote y momento en que avanza su marca | Cumplido | `dw/docs/operacion_y_evidencias.md` | — |
-| 3.6 Dashboard de QuickSight con gráfica, indicador y filtro sobre marts | Pendiente (pendiente 1) | Vista `marts.rpt_sales_dashboard`, guía en `dw/docs/quicksight.md` | — |
-| 3.6 Consulta SQL que valida el indicador | Consulta lista; falta compararla con el dashboard | `dw/docs/quicksight.md` | `72-sql-validacion-kpi` |
+| 3.6 Dashboard de QuickSight con gráfica, indicador y filtro sobre marts | Cumplido | Vista `marts.rpt_sales_dashboard`, `dw/quicksight/` (dataset y dashboard versionados), `dw/docs/quicksight.md` | `70`, `71` |
+| 3.6 Consulta SQL que valida el indicador | Cumplido | `dw/docs/quicksight.md` | `72-sql-validacion-kpi` |
 | 3.6 Actualización de SPICE | Documentado | `dw/docs/quicksight.md` | No aplica con Direct Query |
 
 ### Entregables
@@ -81,18 +91,14 @@ Los conteos coinciden con los de la versión local (DE-DW):
 | Despliegue, ejecución y eliminación | Cumplido | `dw/docs/despliegue.md` |
 | Decisiones técnicas y diferencias frente a la versión local | Cumplido | `dw/docs/decisiones.md` |
 | Costos y controles de seguridad | Cumplido | `dw/docs/costos_y_seguridad.md` |
-| Evidencias de ejecución, pruebas y escenarios | Cumplido | Capturas `00` a `64` |
-| Dashboard de QuickSight y consulta del indicador | Pendiente | Pendiente 1 |
+| Evidencias de ejecución, pruebas y escenarios | Cumplido | Capturas `00` a `90` |
+| Dashboard de QuickSight y consulta del indicador | Cumplido | `70` a `72`, `80-*` |
 
 ### Pendientes
 
-1. **Dashboard de QuickSight** (capturas `70`, `71`, `72` con el mismo filtro y fecha del dashboard, `73` si se usa SPICE y `80-demo-dashboard-despues`).
-   1. Desplegar con `terraform apply` en `dw/terraform` y ejecutar los pasos 1 a 5 de `dw/docs/operacion_y_evidencias.md`.
-   2. Suscribirse a QuickSight en `us-east-1` y seguir `dw/docs/quicksight.md` con Direct Query sobre `marts.rpt_sales_dashboard`.
-   3. Tomar las capturas del paso 7 y la demostración del paso 8.
-   4. Eliminar la cuenta de QuickSight (*Manage QuickSight → Account settings → Delete account*); `terraform destroy` no la elimina.
-2. **Nueva captura del fallo controlado** (`60` a `64`). En la ejecución del 2026-10-26 el lote fallido no traía filas nuevas, de modo que la ausencia de pérdidas y duplicados no quedó demostrada, y el log anterior no incluía el prefijo `[batch=… task=…]`, que ya se agregó. El paso 6 de la guía ahora agrega un lote con `append_batch` antes del fallo; se espera que el lote recupere sus 3 filas sin duplicados y que `fct_sales` pase de 256 a 259 líneas. Se hace en el mismo despliegue del pendiente 1.
-3. **Captura de la eliminación** (`90-terraform-destroy.png`): salida de `terraform destroy` al cerrar el despliegue de los pendientes 1 y 2.
+1. **Pruebas singulares de dbt en AWS.** El filtro de `dw/terraform/airflow.tf` que elegía los archivos a subir a la EC2 excluía toda carpeta llamada `tests`, incluida `dw/dbt/tests/`, así que las cinco pruebas singulares (fechas, festivos y conciliación de ventas por fecha de negocio) no se ejecutaron en ninguno de los dos despliegues: `PASS=93` corresponde a las pruebas declaradas en los `.yml`. El filtro ya se corrigió; en el próximo despliegue `dbt.test` las incluirá por primera vez sobre Redshift y hay que retomar las capturas `14-dbt-test-a/b`.
+
+Resueltos el 2026-10-30: dashboard de QuickSight, nueva evidencia del fallo controlado con un lote que trae filas nuevas y captura de la eliminación (`90-terraform-destroy`). El mismo día se corrigió `airflow.tf`: el `fileset` recorría `terraform/`, donde aparecen el plan y el state entre `plan` y `apply`, y el primer `terraform apply dw.tfplan` fallaba con *inconsistent result*.
 
 ---
 

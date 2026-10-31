@@ -1,0 +1,86 @@
+{
+  "AwsAccountId": "${ACCOUNT_ID}",
+  "DataSetId": "de-aws-dw-rpt-sales",
+  "Name": "rpt_sales_dashboard",
+  "ImportMode": "DIRECT_QUERY",
+  "PhysicalTableMap": {
+    "t": {
+      "RelationalTable": {
+        "DataSourceArn": "arn:aws:quicksight:${REGION}:${ACCOUNT_ID}:datasource/de-aws-dev-dw-redshift",
+        "Schema": "marts",
+        "Name": "rpt_sales_dashboard",
+        "InputColumns": [
+          {
+            "Name": "sale_sk",
+            "Type": "STRING"
+          },
+          {
+            "Name": "sale_date",
+            "Type": "DATETIME"
+          },
+          {
+            "Name": "year",
+            "Type": "INTEGER"
+          },
+          {
+            "Name": "month",
+            "Type": "INTEGER"
+          },
+          {
+            "Name": "category",
+            "Type": "STRING"
+          },
+          {
+            "Name": "product_name",
+            "Type": "STRING"
+          },
+          {
+            "Name": "department",
+            "Type": "STRING"
+          },
+          {
+            "Name": "city",
+            "Type": "STRING"
+          },
+          {
+            "Name": "sales_channel",
+            "Type": "STRING"
+          },
+          {
+            "Name": "quantity",
+            "Type": "INTEGER"
+          },
+          {
+            "Name": "unit_price",
+            "Type": "DECIMAL"
+          },
+          {
+            "Name": "subtotal",
+            "Type": "DECIMAL"
+          },
+          {
+            "Name": "data_refreshed_at",
+            "Type": "DATETIME"
+          }
+        ]
+      }
+    }
+  },
+  "Permissions": [
+    {
+      "Principal": "${QS_USER_ARN}",
+      "Actions": [
+        "quicksight:DescribeDataSet",
+        "quicksight:DescribeDataSetPermissions",
+        "quicksight:PassDataSet",
+        "quicksight:DescribeIngestion",
+        "quicksight:ListIngestions",
+        "quicksight:UpdateDataSet",
+        "quicksight:DeleteDataSet",
+        "quicksight:CreateIngestion",
+        "quicksight:CancelIngestion",
+        "quicksight:UpdateDataSetPermissions"
+      ]
+    }
+  ]
+}

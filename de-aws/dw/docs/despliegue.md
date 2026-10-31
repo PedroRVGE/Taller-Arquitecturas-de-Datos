@@ -68,8 +68,9 @@ make dw-deploy-code     # sube el código a S3 y ejecuta de-aws-deploy en la EC2
 ## 6. Eliminar todo
 
 ```bash
+dw/quicksight/deploy.sh delete   # dashboard y dataset de QuickSight, si se crearon
 cd dw/terraform
 terraform destroy
 ```
 
-Borra la EC2, RDS (sin snapshot final), DocumentDB, Redshift, el bucket con su contenido (`force_destroy`), el secreto (sin ventana de recuperación) y la red. Comprueba en la consola de Billing que no queden recursos. Si creaste un dataset de QuickSight a mano, bórralo antes; la suscripción de QuickSight se cancela aparte.
+Borra la EC2, RDS (sin snapshot final), DocumentDB, Redshift, el bucket con su contenido (`force_destroy`), el secreto (sin ventana de recuperación), la fuente de datos de QuickSight y la red. Comprueba en la consola de Billing que no queden recursos. La suscripción de QuickSight se cancela aparte (*Manage QuickSight → Account settings*, desactivando antes la protección contra eliminación).

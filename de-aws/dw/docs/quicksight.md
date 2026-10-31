@@ -12,6 +12,15 @@ El dashboard consume la vista `marts.rpt_sales_dashboard`: una fila por línea d
 
 ## Dataset y visuales
 
+Con la fuente de datos creada por Terraform, el dataset y el dashboard se crean con un comando. Sus definiciones están versionadas en [`dw/quicksight/`](../quicksight/) (`dataset.json` y `dashboard.json`, sin datos de la cuenta):
+
+```bash
+dw/quicksight/deploy.sh create   # dataset Direct Query + dashboard publicado; imprime la URL
+dw/quicksight/deploy.sh delete   # antes de terraform destroy
+```
+
+El dashboard tiene el KPI "Ventas totales", una tabla con la fecha de actualización (`data_refreshed_at`) y las líneas de venta, la gráfica de ventas por mes y categoría, y un control de filtro por categoría aplicado a todos los visuales. Para crearlo a mano:
+
 - Dataset: tabla `marts.rpt_sales_dashboard`. Modo **Direct Query** (consulta Redshift en cada visual) o **SPICE** (copia en memoria).
 - Visual 1, línea o barras: `sale_date` (por mes) contra `sum(subtotal)`, con `category` como color.
 - Visual 2, KPI: `sum(subtotal)` con el título "Ventas totales".

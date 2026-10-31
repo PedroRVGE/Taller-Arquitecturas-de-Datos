@@ -1,0 +1,263 @@
+{
+  "AwsAccountId": "${ACCOUNT_ID}",
+  "DashboardId": "de-aws-dw-ventas",
+  "Name": "DW Ventas (marts.rpt_sales_dashboard)",
+  "Definition": {
+    "DataSetIdentifierDeclarations": [
+      {
+        "Identifier": "ds",
+        "DataSetArn": "arn:aws:quicksight:${REGION}:${ACCOUNT_ID}:dataset/de-aws-dw-rpt-sales"
+      }
+    ],
+    "Sheets": [
+      {
+        "SheetId": "ventas",
+        "Name": "Ventas",
+        "Visuals": [
+          {
+            "KPIVisual": {
+              "VisualId": "kpi",
+              "Title": {
+                "Visibility": "VISIBLE",
+                "FormatText": {
+                  "PlainText": "Ventas totales"
+                }
+              },
+              "ChartConfiguration": {
+                "FieldWells": {
+                  "Values": [
+                    {
+                      "NumericalMeasureField": {
+                        "FieldId": "kpi_sum",
+                        "Column": {
+                          "DataSetIdentifier": "ds",
+                          "ColumnName": "subtotal"
+                        },
+                        "AggregationFunction": {
+                          "SimpleNumericalAggregation": "SUM"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "TableVisual": {
+              "VisualId": "fresh",
+              "Title": {
+                "Visibility": "VISIBLE",
+                "FormatText": {
+                  "PlainText": "Actualización de los datos"
+                }
+              },
+              "ChartConfiguration": {
+                "FieldWells": {
+                  "TableAggregatedFieldWells": {
+                    "GroupBy": [
+                      {
+                        "DateDimensionField": {
+                          "FieldId": "fresh_date",
+                          "Column": {
+                            "DataSetIdentifier": "ds",
+                            "ColumnName": "data_refreshed_at"
+                          },
+                          "DateGranularity": "MINUTE"
+                        }
+                      }
+                    ],
+                    "Values": [
+                      {
+                        "CategoricalMeasureField": {
+                          "FieldId": "fresh_lines",
+                          "Column": {
+                            "DataSetIdentifier": "ds",
+                            "ColumnName": "sale_sk"
+                          },
+                          "AggregationFunction": "COUNT"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "FieldOptions": {
+                  "SelectedFieldOptions": [
+                    {
+                      "FieldId": "fresh_date",
+                      "CustomLabel": "Datos actualizados a"
+                    },
+                    {
+                      "FieldId": "fresh_lines",
+                      "CustomLabel": "Líneas de venta"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "LineChartVisual": {
+              "VisualId": "line",
+              "Title": {
+                "Visibility": "VISIBLE",
+                "FormatText": {
+                  "PlainText": "Ventas por mes y categoría"
+                }
+              },
+              "ChartConfiguration": {
+                "FieldWells": {
+                  "LineChartAggregatedFieldWells": {
+                    "Category": [
+                      {
+                        "DateDimensionField": {
+                          "FieldId": "line_date",
+                          "Column": {
+                            "DataSetIdentifier": "ds",
+                            "ColumnName": "sale_date"
+                          },
+                          "DateGranularity": "MONTH"
+                        }
+                      }
+                    ],
+                    "Values": [
+                      {
+                        "NumericalMeasureField": {
+                          "FieldId": "line_sum",
+                          "Column": {
+                            "DataSetIdentifier": "ds",
+                            "ColumnName": "subtotal"
+                          },
+                          "AggregationFunction": {
+                            "SimpleNumericalAggregation": "SUM"
+                          }
+                        }
+                      }
+                    ],
+                    "Colors": [
+                      {
+                        "CategoricalDimensionField": {
+                          "FieldId": "line_cat",
+                          "Column": {
+                            "DataSetIdentifier": "ds",
+                            "ColumnName": "category"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "FilterControls": [
+          {
+            "Dropdown": {
+              "FilterControlId": "c_category",
+              "Title": "Categoría",
+              "SourceFilterId": "f_category",
+              "Type": "MULTI_SELECT"
+            }
+          }
+        ],
+        "Layouts": [
+          {
+            "Configuration": {
+              "GridLayout": {
+                "Elements": [
+                  {
+                    "ElementId": "c_category",
+                    "ElementType": "FILTER_CONTROL",
+                    "ColumnIndex": 0,
+                    "ColumnSpan": 12,
+                    "RowIndex": 0,
+                    "RowSpan": 3
+                  },
+                  {
+                    "ElementId": "kpi",
+                    "ElementType": "VISUAL",
+                    "ColumnIndex": 12,
+                    "ColumnSpan": 12,
+                    "RowIndex": 0,
+                    "RowSpan": 5
+                  },
+                  {
+                    "ElementId": "fresh",
+                    "ElementType": "VISUAL",
+                    "ColumnIndex": 24,
+                    "ColumnSpan": 12,
+                    "RowIndex": 0,
+                    "RowSpan": 5
+                  },
+                  {
+                    "ElementId": "line",
+                    "ElementType": "VISUAL",
+                    "ColumnIndex": 0,
+                    "ColumnSpan": 36,
+                    "RowIndex": 5,
+                    "RowSpan": 8
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "FilterGroups": [
+      {
+        "FilterGroupId": "fg_category",
+        "Filters": [
+          {
+            "CategoryFilter": {
+              "FilterId": "f_category",
+              "Column": {
+                "DataSetIdentifier": "ds",
+                "ColumnName": "category"
+              },
+              "Configuration": {
+                "FilterListConfiguration": {
+                  "MatchOperator": "CONTAINS",
+                  "SelectAllOptions": "FILTER_ALL_VALUES"
+                }
+              }
+            }
+          }
+        ],
+        "CrossDataset": "SINGLE_DATASET",
+        "Status": "ENABLED",
+        "ScopeConfiguration": {
+          "SelectedSheets": {
+            "SheetVisualScopingConfigurations": [
+              {
+                "SheetId": "ventas",
+                "Scope": "ALL_VISUALS"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "Permissions": [
+    {
+      "Principal": "${QS_USER_ARN}",
+      "Actions": [
+        "quicksight:DescribeDashboard",
+        "quicksight:ListDashboardVersions",
+        "quicksight:UpdateDashboardPermissions",
+        "quicksight:QueryDashboard",
+        "quicksight:UpdateDashboard",
+        "quicksight:DeleteDashboard",
+        "quicksight:DescribeDashboardPermissions",
+        "quicksight:UpdateDashboardPublishedVersion"
+      ]
+    }
+  ],
+  "DashboardPublishOptions": {
+    "AdHocFilteringOption": {
+      "AvailabilityStatus": "ENABLED"
+    }
+  }
+}

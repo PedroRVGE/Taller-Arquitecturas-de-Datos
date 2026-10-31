@@ -39,3 +39,8 @@ output "redshift_iam_role_arn" {
 output "code_version" {
   value = local.code_version
 }
+
+output "quicksight_principal_arn" {
+  description = "Usuario de QuickSight con permisos sobre la fuente de datos (lo usa quicksight/deploy.sh)."
+  value       = var.quicksight_principal_arn
+}
